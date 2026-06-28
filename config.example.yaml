@@ -154,6 +154,8 @@ fetch:
   timeout_seconds: 30
 
 # AI 配置
+# 推荐：先不设 API key 直接跑，自动降级到本地关键词匹配（够用就先这样用）
+# 想要更精准判断 → 配 ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY 环境变量
 ai:
   provider: "anthropic"  # anthropic / openai / google
   model: "claude-sonnet-4-20250514"  # 按你选的 provider 改对应模型

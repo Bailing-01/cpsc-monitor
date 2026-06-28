@@ -1,0 +1,11 @@
+runs:
+- date: '2026-06-28'
+  timestamp: '2026-06-28T17:08:16.872161'
+  announcement_count: 10
+  high: 8
+  medium: 2
+  low: 0
+  themes:
+  - led
+  - battery
+  - children

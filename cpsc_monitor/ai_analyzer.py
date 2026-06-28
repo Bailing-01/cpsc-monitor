@@ -146,7 +146,11 @@ def _call_openai(prompt: str, config: dict) -> str:
 
 
 def _call_ai(prompt: str, config: dict) -> str:
-    """根据配置选择 AI provider"""
+    """根据配置选择 AI provider
+
+    如果没配 API key，会抛 RuntimeError，由 analyze_risks 的降级逻辑接管。
+    降级方案：基于关键词的本地规则匹配（见 _mock_risk_analysis）。
+    """
     provider = config["ai"].get("provider", "anthropic")
     if provider == "anthropic":
         return _call_anthropic(prompt, config)
@@ -246,23 +250,14 @@ def analyze_risks(announcements: List[Dict[str, Any]], config: dict) -> List[Dic
             ai_response = _call_ai(prompt, config)
             risk_data = _extract_json(ai_response)
             risk_data["_announcement"] = ann  # 保留原始公告引用
+            risk_data["_ai_mode"] = True
             results.append(risk_data)
         except Exception as e:
-            logger.error(f"  AI 调用失败：{e}")
-            # 降级：标为低风险
-            results.append({
-                "is_relevant": False,
-                "matched_skus": [],
-                "risk_level": "low",
-                "risk_rationale": f"AI 调用失败：{e}",
-                "action_required": [],
-                "deadline_days": 0,
-                "compliance_docs_needed": [],
-                "estimated_cost_usd": 0,
-                "source_url": ann.get("url", ""),
-                "_announcement": ann,
-                "_error": True,
-            })
+            # AI 调用失败 → 降级到 mock 模式（关键词匹配）
+            logger.warning(f"  AI 调用失败，降级到 mock 模式：{e}")
+            risk_data = _mock_risk_analysis(ann, config)
+            risk_data["_announcement"] = ann
+            results.append(risk_data)
 
     # 保存 JSON 结果
     output_dir = Path(config.get("output", {}).get("dir", "./output"))
@@ -301,21 +296,11 @@ def summarize_announcements(announcements: List[Dict[str, Any]], risk_analysis: 
     try:
         ai_response = _call_ai(prompt, config)
         summary = _extract_json(ai_response)
+        summary["_ai_mode"] = True
     except Exception as e:
-        logger.error(f"聚合分析 AI 调用失败：{e}，使用本地聚合")
-        # 降级：本地统计
-        summary = {
-            "summary_by_risk": {
-                "high_count": sum(1 for r in risk_analysis if r.get("risk_level") == "high"),
-                "medium_count": sum(1 for r in risk_analysis if r.get("risk_level") == "medium"),
-                "low_count": sum(1 for r in risk_analysis if r.get("risk_level") == "low"),
-            },
-            "todays_themes": [],
-            "recurring_categories_7d": [],
-            "next_week_prediction": "AI 聚合失败，建议人工查看",
-            "top_3_attention": [],
-            "_error": str(e),
-        }
+        logger.warning(f"  聚合 AI 调用失败，降级到 mock 聚合：{e}")
+        # 降级：mock 聚合（基于关键词统计）
+        summary = _mock_summary(announcements, risk_analysis, config)
 
     # 保存
     output_dir = Path(config.get("output", {}).get("dir", "./output"))
@@ -343,3 +328,150 @@ def _format_sku_list(skus: List[Dict[str, Any]]) -> str:
             lines.append(f"  category: {sku['category']}")
         lines.append("")
     return "\n".join(lines)
+
+
+# 风险关键词字典（用于 mock 模式：没有 AI API key 时的本地降级判断）
+RISK_KEYWORDS = {
+    "high": [
+        "child", "children", "kids", "infant", "toddler",
+        "button cell", "coin battery", "lithium", "battery ingestion",
+        "fire", "burn", "flame", "ignite",
+        "choke", "choking", "asphyxiation", "strangulation",
+        "poison", "toxic", "lead",
+        "electrocution", "electric shock",
+        "magnet ingestion",
+        "sleepwear", "flammable",
+    ],
+    "medium": [
+        "overheat", "overheating",
+        "recall", "violate", "violation",
+        "smoke detector", "co detector", "carbon monoxide",
+        "explosion",
+    ],
+}
+
+
+def _mock_risk_analysis(ann: Dict[str, Any], config: dict) -> Dict[str, Any]:
+    """没有 LLM API key 时的降级分析：纯关键词匹配。
+
+    规则：
+    - 公告文本含 high 关键词 + 我的 SKU 含相关关键词 → HIGH
+    - 公告文本含 medium 关键词 → MEDIUM
+    - 其他 → LOW
+
+    返回结构与 AI 返回的 JSON 完全一致，便于下游 report.py 统一处理。
+    """
+    text = (ann.get("title", "") + " " + ann.get("summary", "")).lower()
+
+    high_hits = [kw for kw in RISK_KEYWORDS["high"] if kw in text]
+    medium_hits = [kw for kw in RISK_KEYWORDS["medium"] if kw in text]
+
+    # 匹配我的 SKU
+    matched_skus = []
+    for sku in config.get("my_skus", []):
+        sku_keywords = [k.lower() for k in sku.get("keywords", [])]
+        overlap = [kw for kw in sku_keywords if kw in text]
+        if overlap:
+            matched_skus.append({
+                "sku_name": sku.get("name", ""),
+                "asin": sku.get("asin", ""),
+                "match_reason": f"公告命中关键词 {overlap}",
+                "specific_risk": "; ".join(overlap[:3]),
+            })
+
+    if high_hits and matched_skus:
+        risk_level = "high"
+        risk_rationale = (
+            f"公告含安全风险关键词 {high_hits[:3]}，"
+            f"且匹配你的 SKU：{[s['sku_name'] for s in matched_skus[:2]]}"
+        )
+        actions = [
+            "立刻下架相关 SKU",
+            "排查库存是否属于同型号/同供应商",
+            "向供应商索取最新合规报告（UL/CPSC 证书）",
+            "若已发货客户，48 小时内主动联系召回",
+        ]
+        deadline = 7
+    elif high_hits:
+        risk_level = "high"
+        risk_rationale = f"公告含安全风险关键词 {high_hits[:3]}，请人工核查你的 SKU 是否相关"
+        actions = [
+            "人工核查你的 SKU 是否涉及同类风险",
+            "若有关联立刻下架并查合规文件",
+        ]
+        deadline = 7
+    elif medium_hits or matched_skus:
+        risk_level = "medium"
+        risk_rationale = (
+            f"公告含合规关键词 {medium_hits[:3] if medium_hits else []}，"
+            f"或匹配你的 SKU 类目（{', '.join(s.get('name','') for s in matched_skus[:2])}）"
+        )
+        actions = [
+            "评估你的商品是否在同品类",
+            "检查你的合规文件是否完整",
+        ]
+        deadline = 14
+    else:
+        risk_level = "low"
+        risk_rationale = "公告与你当前 SKU 无明显关联"
+        actions = []
+        deadline = 0
+
+    return {
+        "is_relevant": bool(matched_skus or high_hits),
+        "matched_skus": matched_skus,
+        "risk_level": risk_level,
+        "risk_rationale": risk_rationale,
+        "action_required": actions,
+        "deadline_days": deadline,
+        "compliance_docs_needed": ["UL 报告", "CPC 证书"] if risk_level == "high" else [],
+        "estimated_cost_usd": 1500 if risk_level == "high" else (500 if risk_level == "medium" else 0),
+        "source_url": ann.get("url", ""),
+        "_mock_mode": True,
+    }
+
+
+def _mock_summary(announcements, risk_analysis, config):
+    """没有 LLM API key 时的聚合分析降级"""
+    high_count = sum(1 for r in risk_analysis if r.get("risk_level") == "high")
+    medium_count = sum(1 for r in risk_analysis if r.get("risk_level") == "medium")
+    low_count = sum(1 for r in risk_analysis if r.get("risk_level") == "low")
+
+    # 提取今日主题：按命中关键词聚合
+    theme_counter = {}
+    for r in risk_analysis:
+        if r.get("risk_level") in ("high", "medium"):
+            matched = r.get("matched_skus", [])
+            for m in matched:
+                cat = m.get("specific_risk", "").split(";")[0].strip() or m.get("sku_name", "")
+                theme_counter[cat] = theme_counter.get(cat, 0) + 1
+
+    themes = sorted(theme_counter.keys(), key=lambda k: -theme_counter[k])[:3]
+
+    # top_3 attention
+    top = [r for r in risk_analysis if r.get("risk_level") == "high"][:3]
+    top3 = [
+        {
+            "rank": i + 1,
+            "title": r.get("_announcement", {}).get("title", ""),
+            "sku_impact": ", ".join(s.get("sku_name", "") for s in r.get("matched_skus", [])[:2]),
+        }
+        for i, r in enumerate(top)
+    ]
+
+    return {
+        "summary_by_risk": {
+            "high_count": high_count,
+            "medium_count": medium_count,
+            "low_count": low_count,
+        },
+        "todays_themes": themes,
+        "recurring_categories_7d": themes,  # 单日数据无法做 7 天聚合，复用今日主题
+        "next_week_prediction": (
+            "建议持续关注儿童/电池类目召回趋势"
+            if any("child" in t.lower() or "battery" in t.lower() for t in themes)
+            else "建议保持每日监控"
+        ),
+        "top_3_attention": top3,
+        "_mock_mode": True,
+    }

@@ -26,7 +26,12 @@ from pathlib import Path
 
 from cpsc_monitor.config import load_config
 from cpsc_monitor.fetcher import fetch_announcements
-from cpsc_monitor.ai_analyzer import analyze_risks, summarize_announcements
+from cpsc_monitor.ai_analyzer import (
+    analyze_risks,
+    summarize_announcements,
+    _mock_risk_analysis,
+    _mock_summary,
+)
 from cpsc_monitor.report import render_report, send_email_alert, send_sms_alert
 from cpsc_monitor.history import update_history
 from cpsc_monitor.utils import setup_logging, ensure_dirs, log_run
@@ -74,17 +79,29 @@ def run(target_date: date, fetch_only=False, analyze_only=False, send_enabled=Tr
             update_history(target_date, {"announcement_count": 0, "high": 0, "medium": 0, "low": 0})
             return {"status": "ok", "announcement_count": 0}
 
-        # Step 3: AI 风险判断
+        # Step 3: AI 风险判断（自动降级到 mock 模式）
         logger.info(f"[3/6] AI 风险判断...")
-        risk_analysis = analyze_risks(announcements, config)
-        high_count = sum(1 for r in risk_analysis if r.get("risk_level") == "high")
-        medium_count = sum(1 for r in risk_analysis if r.get("risk_level") == "medium")
-        low_count = sum(1 for r in risk_analysis if r.get("risk_level") == "low")
-        logger.info(f"  高风险 {high_count} 个，中风险 {medium_count} 个，低风险 {low_count} 个")
+        try:
+            risk_analysis = analyze_risks(announcements, config)
+            high_count = sum(1 for r in risk_analysis if r.get("risk_level") == "high")
+            medium_count = sum(1 for r in risk_analysis if r.get("risk_level") == "medium")
+            low_count = sum(1 for r in risk_analysis if r.get("risk_level") == "low")
+            logger.info(f"  使用 AI 模式 - 高风险 {high_count} 个，中风险 {medium_count} 个，低风险 {low_count} 个")
+        except Exception as e:
+            logger.warning(f"  AI 调用失败，降级到 mock 模式：{e}")
+            risk_analysis = [_mock_risk_analysis(ann, config) for ann in announcements]
+            high_count = sum(1 for r in risk_analysis if r.get("risk_level") == "high")
+            medium_count = sum(1 for r in risk_analysis if r.get("risk_level") == "medium")
+            low_count = sum(1 for r in risk_analysis if r.get("risk_level") == "low")
+            logger.info(f"  使用 mock 模式 - 高风险 {high_count} 个，中风险 {medium_count} 个，低风险 {low_count} 个")
 
         # Step 4: 聚合分析
         logger.info(f"[4/6] 聚合分析...")
-        summary = summarize_announcements(announcements, risk_analysis, config)
+        try:
+            summary = summarize_announcements(announcements, risk_analysis, config)
+        except Exception as e:
+            logger.warning(f"  聚合 AI 失败，降级到 mock 聚合：{e}")
+            summary = _mock_summary(announcements, risk_analysis, config)
         logger.info(f"  今日主题：{summary.get('todays_themes', [])}")
 
         # Step 5: 生成报告 + 发送
