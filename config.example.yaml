@@ -1,0 +1,113 @@
+# CPSC 监控 Skill 配置示例
+# ⚠️ 设计稿，最终版拷到 GitHub 仓库 cpsc-monitor/config.example.yaml
+
+# ============================================
+# 必填字段（用户必须改的部分）
+# ============================================
+
+# 我的 SKU 列表
+# 格式：每行一个 SKU，包含名称、ASIN、HS Code、关键词
+# ⚠️ 关键词越具体，AI 风险判断越准
+my_skus:
+  - name: "儿童电动牙刷 K1"
+    asin: "B0XXXXXXXX"
+    hs_code: "8509.80"  # 电动牙刷
+    keywords: ["儿童", "电动牙刷", "电池", "可充电", "toothbrush", "kids"]
+    category: "儿童产品+电池"
+    
+  - name: "便携充电宝 P2"
+    asin: "B0YYYYYYYY"
+    hs_code: "8507.60"  # 锂离子电池
+    keywords: ["充电宝", "锂电池", "便携", "power bank", "lithium"]
+    category: "电池产品"
+    
+  - name: "磁力积木玩具 M3"
+    asin: "B0ZZZZZZZZ"
+    hs_code: "9503.00"  # 玩具
+    keywords: ["磁力", "积木", "儿童", "magnet", "toy", "kids"]
+    category: "儿童产品+磁铁"
+    
+  # 继续加你的 SKU...
+
+# 告警邮箱（高风险必发，中低风险进日报）
+# 可以配多个
+alert_emails:
+  - "[email protected]"   # 你自己
+  - "[email protected]"  # 运营负责人（可选）
+
+# ============================================
+# 选填字段（不填也能跑，只是少了些功能）
+# ============================================
+
+# 短信告警（高风险时发短信）
+# 需要 Twilio 账号，参考 README 的 Twilio 配置
+sms:
+  enabled: false
+  phone: "+8613800000000"  # 手机号
+  twilio_account_sid: ""   # Twilio SID
+  twilio_auth_token: ""    # Twilio Token
+  twilio_from_number: ""   # Twilio 发送号
+
+# 亚马逊后台"账户状况"页面截图（每天早上 9 点截图后 OCR）
+# 这个功能需要本地跑一个 Playwright 脚本
+amazon_account_screenshot:
+  enabled: false
+  screenshot_path: "./screenshots/account-health-{date}.png"
+
+# 邮件订阅（直接订阅 CPSC.gov 的邮件通知）
+# 配了之后，CPSC 发的邮件会自动到你的 AI 邮箱
+email_subscription:
+  enabled: false
+  forward_to_email: "[email protected]"  # 转发到这个邮箱
+  imap_host: "imap.gmail.com"
+  imap_user: "[email protected]"
+  imap_password: "xxxx-xxxx-xxxx"  # Gmail App Password
+
+# 自定义高风险品类
+# 默认已覆盖：儿童产品/电池/磁铁/电子产品/家用电器
+# 想加新的高风险品类在这里加
+custom_categories:
+  - name: "化妆品"
+    keywords: ["cosmetics", "makeup", "skincare", "化妆品"]
+    risk_level: "high"
+  - name: "珠宝首饰"
+    keywords: ["jewelry", "necklace", "ring", "首饰"]
+    risk_level: "medium"
+
+# ============================================
+# 高级配置（一般不用改）
+# ============================================
+
+# 抓取频率
+fetch:
+  cron: "0 9 * * *"  # 每天早上 9 点
+  retry_times: 3
+  timeout_seconds: 30
+
+# AI 配置
+ai:
+  provider: "anthropic"  # 或 openai / google / minimax
+  model: "claude-sonnet-4-20250514"
+  temperature: 0.1  # 低温度，结果稳定
+  max_tokens: 4000
+
+# 历史记录
+history:
+  retention_days: 90  # 保留 90 天
+  log_path: "./history.yaml"
+
+# 输出目录
+output:
+  dir: "./output"
+  keep_raw: true  # 保留原始公告文件
+  keep_analysis: true  # 保留 JSON 分析结果
+
+# ============================================
+# 使用示例（注释掉，下面是给用户看的提示）
+# ============================================
+
+# 1. 复制本文件为 config.yaml
+# 2. 填写 my_skus 和 alert_emails
+# 3. （可选）填写 sms 和 amazon_account_screenshot
+# 4. 运行：python run.py
+# 5. 查看 ./output/{date}-risk-report.md
