@@ -1,5 +1,6 @@
 # CPSC 监控 Skill 配置示例
-# ⚠️ 设计稿，最终版拷到 GitHub 仓库 cpsc-monitor/config.example.yaml
+# ⚠️ 这是示例文件，你需要复制为 config.yaml 并修改成你自己的 SKU
+# 复制命令：cp config.example.yaml config.yaml
 
 # ============================================
 # 必填字段（用户必须改的部分）
@@ -8,32 +9,97 @@
 # 我的 SKU 列表
 # 格式：每行一个 SKU，包含名称、ASIN、HS Code、关键词
 # ⚠️ 关键词越具体，AI 风险判断越准
+# ⚠️ 至少填 10 个 SKU，否则启动会报错
+
 my_skus:
+  # ===== 儿童产品（高风险）=====
   - name: "儿童电动牙刷 K1"
     asin: "B0XXXXXXXX"
     hs_code: "8509.80"  # 电动牙刷
-    keywords: ["儿童", "电动牙刷", "电池", "可充电", "toothbrush", "kids"]
+    keywords: ["儿童", "电动牙刷", "电池", "可充电", "toothbrush", "kids", "children"]
     category: "儿童产品+电池"
     
-  - name: "便携充电宝 P2"
+  - name: "婴儿学步车 B2"
     asin: "B0YYYYYYYY"
-    hs_code: "8507.60"  # 锂离子电池
-    keywords: ["充电宝", "锂电池", "便携", "power bank", "lithium"]
-    category: "电池产品"
+    hs_code: "8715.00"  # 婴儿车
+    keywords: ["婴儿", "学步车", "walker", "baby", "infant", "toddler"]
+    category: "儿童产品"
     
-  - name: "磁力积木玩具 M3"
+  - name: "儿童磁性积木 M3"
     asin: "B0ZZZZZZZZ"
     hs_code: "9503.00"  # 玩具
-    keywords: ["磁力", "积木", "儿童", "magnet", "toy", "kids"]
+    keywords: ["儿童", "磁性", "积木", "magnet", "toy", "kids", "blocks"]
     category: "儿童产品+磁铁"
     
-  # 继续加你的 SKU...
+  - name: "儿童背包含铅检测 T4"
+    asin: "B0AAAAAAA"
+    hs_code: "4202.92"  # 背包
+    keywords: ["儿童", "背包", "书包", "backpack", "kids", "school", "lead"]
+    category: "儿童产品+化学品"
+
+  # ===== 电池产品（高风险）=====
+  - name: "便携充电宝 P2"
+    asin: "B0BBBBBBB"
+    hs_code: "8507.60"  # 锂离子电池
+    keywords: ["充电宝", "锂电池", "便携", "power bank", "lithium", "battery"]
+    category: "电池产品"
+    
+  - name: "蓝牙耳机 E5"
+    asin: "B0CCCCCCC"
+    hs_code: "8518.30"  # 耳机
+    keywords: ["蓝牙", "耳机", "电池", "wireless", "earbuds", "headphones", "lithium"]
+    category: "电池产品+电子产品"
+    
+  - name: "电动工具 D6"
+    asin: "B0DDDDDDD"
+    hs_code: "8467.21"  # 电动钻孔机
+    keywords: ["电动", "工具", "锂电池", "drill", "cordless", "tool", "battery"]
+    category: "电池产品+电动工具"
+    
+  - name: "USB-C 充电线 C7"
+    asin: "B0EEEEEEE"
+    hs_code: "8544.42"  # 数据线
+    keywords: ["充电线", "USB", "type-c", "cable", "charger", "cord"]
+    category: "电子产品+电池"
+
+  # ===== 电子产品 + 家用电器 =====
+  - name: "智能插座 S8"
+    asin: "B0FFFFFFF"
+    hs_code: "8536.69"  # 插座
+    keywords: ["插座", "智能", "wifi", "plug", "smart", "socket", "electrical"]
+    category: "电子产品+电气安全"
+    
+  - name: "电热水壶 K9"
+    asin: "B0GGGGGGG"
+    hs_code: "8516.71"  # 电热水壶
+    keywords: ["电热水壶", "烧水", "kettle", "electric", "boil", "appliance"]
+    category: "家用电器"
+    
+  - name: "空气净化器 A10"
+    asin: "B0HHHHHHH"
+    hs_code: "8421.39"  # 空气净化器
+    keywords: ["空气净化器", "HEPA", "filter", "air purifier", "appliance"]
+    category: "家用电器+电气安全"
+
+  # ===== 磁铁 + 装饰类（中等风险）=====
+  - name: "磁性冰箱贴 F11"
+    asin: "B0IIIIIII"
+    hs_code: "8505.11"  # 永磁铁
+    keywords: ["磁性", "冰箱贴", "磁铁", "magnet", "fridge", "refrigerator"]
+    category: "磁铁产品"
+    
+  - name: "装饰蜡烛灯 C12"
+    asin: "B0JJJJJJJ"
+    hs_code: "9405.40"  # 灯具
+    keywords: ["蜡烛", "装饰灯", "LED", "candle", "decorative", "light"]
+    category: "家用电器+装饰"
 
 # 告警邮箱（高风险必发，中低风险进日报）
 # 可以配多个
 alert_emails:
-  - "[email protected]"   # 你自己
-  - "[email protected]"  # 运营负责人（可选）
+  - "YOUR_EMAIL@example.com"   # 你自己（必填）
+  - "YOUR_EMAIL@example.com"  # 运营负责人（可选）
+  - "YOUR_EMAIL@example.com"   # 财务负责人（可选）
 
 # ============================================
 # 选填字段（不填也能跑，只是少了些功能）
@@ -42,25 +108,25 @@ alert_emails:
 # 短信告警（高风险时发短信）
 # 需要 Twilio 账号，参考 README 的 Twilio 配置
 sms:
-  enabled: false
-  phone: "+8613800000000"  # 手机号
-  twilio_account_sid: ""   # Twilio SID
-  twilio_auth_token: ""    # Twilio Token
+  enabled: false  # 默认关闭，需要 Twilio 账号再开启
+  phone: "+861****0000"  # 手机号（带国家代码）
+  twilio_account_sid: ""   # Twilio Account SID
+  twilio_auth_token: ""    # Twilio Auth Token
   twilio_from_number: ""   # Twilio 发送号
 
 # 亚马逊后台"账户状况"页面截图（每天早上 9 点截图后 OCR）
 # 这个功能需要本地跑一个 Playwright 脚本
 amazon_account_screenshot:
-  enabled: false
+  enabled: false  # 默认关闭
   screenshot_path: "./screenshots/account-health-{date}.png"
 
 # 邮件订阅（直接订阅 CPSC.gov 的邮件通知）
 # 配了之后，CPSC 发的邮件会自动到你的 AI 邮箱
 email_subscription:
   enabled: false
-  forward_to_email: "[email protected]"  # 转发到这个邮箱
+  forward_to_email: "YOUR_EMAIL@example.com"  # 转发到这个邮箱
   imap_host: "imap.gmail.com"
-  imap_user: "[email protected]"
+  imap_user: "YOUR_EMAIL@example.com"
   imap_password: "xxxx-xxxx-xxxx"  # Gmail App Password
 
 # 自定义高风险品类
@@ -73,6 +139,9 @@ custom_categories:
   - name: "珠宝首饰"
     keywords: ["jewelry", "necklace", "ring", "首饰"]
     risk_level: "medium"
+  - name: "家具"
+    keywords: ["furniture", "chair", "table", "家具"]
+    risk_level: "medium"
 
 # ============================================
 # 高级配置（一般不用改）
@@ -80,15 +149,15 @@ custom_categories:
 
 # 抓取频率
 fetch:
-  cron: "0 9 * * *"  # 每天早上 9 点
+  cron: "0 9 * * *"  # 每天早上 9 点（cron 格式）
   retry_times: 3
   timeout_seconds: 30
 
 # AI 配置
 ai:
-  provider: "anthropic"  # 或 openai / google / minimax
-  model: "claude-sonnet-4-20250514"
-  temperature: 0.1  # 低温度，结果稳定
+  provider: "anthropic"  # anthropic / openai / google
+  model: "claude-sonnet-4-20250514"  # 按你选的 provider 改对应模型
+  temperature: 0.1  # 低温度，结果稳定（0 = 最稳定，1 = 最随机）
   max_tokens: 4000
 
 # 历史记录
@@ -103,11 +172,24 @@ output:
   keep_analysis: true  # 保留 JSON 分析结果
 
 # ============================================
-# 使用示例（注释掉，下面是给用户看的提示）
+# 使用示例
 # ============================================
 
 # 1. 复制本文件为 config.yaml
-# 2. 填写 my_skus 和 alert_emails
-# 3. （可选）填写 sms 和 amazon_account_screenshot
-# 4. 运行：python run.py
-# 5. 查看 ./output/{date}-risk-report.md
+#    cp config.example.yaml config.yaml
+#
+# 2. 填写 my_skus（替换成你自己的产品，至少 10 个）
+# 3. 填写 alert_emails（至少 1 个真实邮箱）
+#
+# 4. 设置环境变量（AI API key + SMTP）：
+#    export ANTHROPIC_API_KEY="sk-ant-..."
+#    export SMTP_HOST="smtp.gmail.com"
+#    export SMTP_USER="YOUR_EMAIL@example.com"
+#    export SMTP_PASSWORD="xxxx-xxxx-xxxx"
+#
+# 5. 测试运行：
+#    python run.py --fetch-only   # 只抓取不分析
+#    python run.py --no-send      # 跑全流程但不发送邮件
+#
+# 6. 设置每日定时（crontab -e）：
+#    0 9 * * * cd /path/to/cpsc-monitor && python run.py >> ./logs/cron.log 2>&1
