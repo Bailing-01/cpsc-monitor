@@ -11,6 +11,11 @@ feedparser>=6.0.10
 # HTML 解析（公告详情页）
 beautifulsoup4>=4.12.0
 
+# Playwright 真实浏览器（绕过 CPSC 反爬）
+playwright>=1.40.0
+playwright-stealth>=2.0.0
+# 注意：安装后还需要 playwright install chromium 下载浏览器（~100MB）
+
 # 邮件发送
 emails>=0.6.0
 jinja2>=3.1.0

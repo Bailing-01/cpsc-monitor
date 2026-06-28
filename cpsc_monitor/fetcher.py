@@ -1,128 +1,232 @@
 """
-CPSC 公告抓取
+CPSC 公告抓取（Playwright stealth 版本）
 
-支持 3 个数据源：
-1. CPSC 官网 RSS（必抓）
-2. CPSC.gov "SaferProducts" 数据库（必抓）
-3. 亚马逊后台"账户状况"页面截图 OCR（可选）
+主要数据源：CPSC 官网（用 Playwright 真实浏览器绕过 Akamai 反爬）
+降级数据源：CPSC RSS（用 feedparser，作为备份）
+
+注意：
+- 首次抓取通常成功
+- 连续抓取可能被 Akamai 风控（每天只跑 1 次可降低风险）
+- stealth 插件能绕过 80% 检测，但不是 100%
 """
 
 import logging
-import feedparser
-import requests
-from datetime import date, timedelta
+import random
+import time
+from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Any
-from bs4 import BeautifulSoup
+from typing import List, Dict, Any, Optional
 
 from cpsc_monitor.utils import retry
 
 logger = logging.getLogger("cpsc-monitor.fetcher")
 
 
-# CPSC 公开数据源
+# CPSC 数据源
+CPSC_RECALLS_URL = "https://www.cpsc.gov/Recalls"
 CPSC_RSS_URL = "https://www.cpsc.gov/cpscrecalls/rss"
-SAFERPRODUCTS_API = "https://www.saferproducts.gov/RestWebServices/Recall"
 
 
-@retry(max_attempts=3, delay_seconds=2, backoff=2)
-def fetch_cpsc_rss(target_date: date) -> List[Dict[str, Any]]:
+# ============================================================
+# 主数据源：用 Playwright 抓 CPSC Recalls 页面
+# ============================================================
+
+def _fetch_with_playwright(url: str, wait_selector: Optional[str] = None) -> str:
     """
-    从 CPSC 官网 RSS 抓取最新公告
+    用 Playwright 真实浏览器抓 URL
+
+    Args:
+        url: 目标 URL
+        wait_selector: 等待这个 selector 出现再返回（可选）
 
     Returns:
-        公告列表，每条包含 title/url/published/summary
+        页面 HTML
     """
-    logger.info(f"  抓取 CPSC RSS: {CPSC_RSS_URL}")
-    feed = feedparser.parse(CPSC_RSS_URL)
+    from playwright.sync_api import sync_playwright
+    from playwright_stealth import Stealth
 
-    if feed.bozo and not feed.entries:
-        raise RuntimeError(f"CPSC RSS 解析失败：{feed.bozo_exception}")
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            viewport={"width": 1920, "height": 1080},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            locale="en-US",
+            timezone_id="America/New_York",
+        )
+        page = context.new_page()
 
+        # 应用 stealth 反检测（新 API）
+        stealth = Stealth()
+        stealth.apply_stealth_sync(page)
+
+        # 慢速抓取：先访问首页建立 cookie，再访问目标
+        # 这一步绕过 Akamai 第一次访问的风控
+        logger.debug(f"  第一次访问 cpsc.gov 首页...")
+        page.goto("https://www.cpsc.gov/", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(random.uniform(1.5, 3.0))  # 模拟人类浏览
+
+        logger.debug(f"  第二次访问目标: {url}")
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+
+        # 如果指定了 selector，等待它出现
+        if wait_selector:
+            try:
+                page.wait_for_selector(wait_selector, timeout=15000)
+            except Exception as e:
+                logger.warning(f"  等待 selector '{wait_selector}' 超时：{e}")
+
+        # 慢一点，让 JS 跑完
+        time.sleep(random.uniform(2.0, 4.0))
+
+        content = page.content()
+        browser.close()
+        return content
+
+
+def _parse_cpsc_recalls_html(html: str) -> List[Dict[str, Any]]:
+    """
+    解析 CPSC Recalls 页面 HTML，提取公告列表
+
+    CPSC Drupal 页面结构（2026 年）：
+    - 每个 recall 是一个 view-row 或 article 标签
+    - 标题在 h2/h3 内，链接指向 /Recalls/[year]/[slug]
+    """
+    from bs4 import BeautifulSoup
+    import re
+
+    soup = BeautifulSoup(html, "html.parser")
     announcements = []
-    cutoff = target_date - timedelta(days=1)  # 抓今天 + 昨天的
 
-    for entry in feed.entries[:30]:  # 最多取 30 条
-        # 解析发布时间
-        published_parsed = entry.get("published_parsed") or entry.get("updated_parsed")
-        if not published_parsed:
+    # 找所有 /Recalls/[year]/... 格式的链接（真实召回公告）
+    # 排除导航链接如 /Recalls/API、/Recalls/violations 等
+    all_recall_links = soup.select('a[href*="/Recalls/"]')
+    real_recall_links = [
+        a for a in all_recall_links
+        if re.search(r'/Recalls/\d{4}/', a.get('href', ''))
+    ]
+
+    seen_urls = set()
+    for link in real_recall_links:
+        href = link.get("href", "")
+        if not href or "/Recalls/" not in href:
             continue
 
-        from datetime import datetime
-        published_dt = datetime(*published_parsed[:6]).date()
-        if published_dt < cutoff:
+        # 拼完整 URL
+        if href.startswith("/"):
+            full_url = f"https://www.cpsc.gov{href}"
+        elif href.startswith("http"):
+            full_url = href
+        else:
+            continue
+
+        # 去重
+        if full_url in seen_urls:
+            continue
+        seen_urls.add(full_url)
+
+        # 提取标题
+        title = link.get_text(strip=True)
+        # 过滤过短或纯导航的标题
+        if not title or len(title) < 15:
+            continue
+        if title.lower() in ("previously recalled", "view all", "see more", "read more"):
             continue
 
         announcements.append({
-            "title": entry.get("title", "").strip(),
-            "url": entry.get("link", "").strip(),
-            "published": published_dt.isoformat(),
-            "summary": entry.get("summary", "").strip(),
-            "source": "cpsc_rss",
-            # 抓正文（可选）
-            "content": _fetch_full_content(entry.get("link", "")),
+            "title": title,
+            "url": full_url,
+            "published": "",  # HTML 里通常没日期，要进详情页
+            "summary": "",
+            "source": "cpsc_recalls",
+            "content": "",  # 列表页没正文
         })
 
-    logger.info(f"  RSS 抓到 {len(announcements)} 条公告")
+    logger.debug(f"  HTML 解析出 {len(announcements)} 个公告")
     return announcements
 
 
-def _fetch_full_content(url: str) -> str:
-    """抓公告详情页正文（best-effort，失败不影响主流程）"""
-    if not url:
-        return ""
-
-    try:
-        response = requests.get(url, timeout=15, headers={"User-Agent": "cpsc-monitor/1.0"})
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, "html.parser")
-        # CPSC 页面正文通常在 article 或 main 标签
-        content = soup.find("article") or soup.find("main") or soup.find("div", class_="field-items")
-        return content.get_text(strip=True)[:3000] if content else ""
-    except Exception as e:
-        logger.debug(f"  抓公告正文失败：{url} - {e}")
-        return ""
-
-
-@retry(max_attempts=3, delay_seconds=2, backoff=2)
-def fetch_saferproducts(target_date: date) -> List[Dict[str, Any]]:
+def _fetch_recall_detail(url: str) -> Dict[str, str]:
     """
-    从 SaferProducts.gov 数据库抓取召回事件
+    抓单个公告详情页，提取发布日期和摘要
 
     Returns:
-        公告列表
+        {"published": "YYYY-MM-DD", "summary": "..."}
     """
-    logger.info(f"  抓取 SaferProducts 数据库")
     try:
-        params = {
-            "RecallDateStart": (target_date - timedelta(days=2)).strftime("%Y-%m-%d"),
-            "RecallDateEnd": target_date.strftime("%Y-%m-%d"),
-            "format": "json",
-        }
-        response = requests.get(SAFERPRODUCTS_API, params=params, timeout=20)
-        response.raise_for_status()
-        data = response.json()
+        html = _fetch_with_playwright(url)
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html, "html.parser") if html else None
+        if not soup:
+            return {}
+
+        # 找日期（CPSC 页面通常在 .field--name-field-recall-date 或 .date-display-single）
+        date_elem = (
+            soup.select_one(".date-display-single")
+            or soup.select_one('[property="dc:date"]')
+            or soup.select_one("time")
+        )
+        published = ""
+        if date_elem:
+            published = date_elem.get("content") or date_elem.get_text(strip=True)
+
+        # 找摘要（recall 描述）
+        summary_elem = (
+            soup.select_one(".field--name-body")
+            or soup.select_one("article p")
+        )
+        summary = ""
+        if summary_elem:
+            summary = summary_elem.get_text(strip=True)[:500]
+
+        return {"published": published, "summary": summary, "content": summary[:3000]}
+    except Exception as e:
+        logger.debug(f"  抓详情失败 {url}: {e}")
+        return {}
+
+
+# ============================================================
+# 备份数据源：用 feedparser 抓 RSS（可能 403，但试一下）
+# ============================================================
+
+def _fetch_cpsc_rss() -> List[Dict[str, Any]]:
+    """尝试用 feedparser 抓 RSS（可能 403）"""
+    import feedparser
+    try:
+        feed = feedparser.parse(CPSC_RSS_URL)
+        if feed.bozo and not feed.entries:
+            logger.warning(f"  RSS 解析失败（可能被 Akamai 挡）: {feed.bozo_exception}")
+            return []
+        if not feed.entries:
+            return []
 
         announcements = []
-        for item in data if isinstance(data, list) else data.get("results", []):
+        for entry in feed.entries[:30]:
             announcements.append({
-                "title": item.get("RecallTitle", "").strip(),
-                "url": f"https://www.saferproducts.gov/ViewRecall/{item.get('RecallID', '')}",
-                "published": item.get("RecallDate", ""),
-                "summary": item.get("HazardDescription", "")[:500],
-                "source": "saferproducts",
-                "content": item.get("Description", "")[:3000],
+                "title": entry.get("title", "").strip(),
+                "url": entry.get("link", "").strip(),
+                "published": entry.get("published", ""),
+                "summary": entry.get("summary", "").strip()[:500],
+                "source": "cpsc_rss",
+                "content": "",
             })
-        logger.info(f"  SaferProducts 抓到 {len(announcements)} 条")
+        logger.info(f"  RSS 抓到 {len(announcements)} 条")
         return announcements
     except Exception as e:
-        logger.warning(f"  SaferProducts 抓取失败：{e}")
+        logger.warning(f"  RSS 抓取失败：{e}")
         return []
 
 
+# ============================================================
+# 主函数
+# ============================================================
+
+@retry(max_attempts=3, delay_seconds=5, backoff=2)
 def fetch_announcements(config: dict, target_date: date) -> List[Dict[str, Any]]:
     """
-    抓取所有数据源并合并去重
+    抓取 CPSC 公告（Playwright + stealth 主路径，RSS 备份）
 
     Args:
         config: 配置字典
@@ -131,37 +235,46 @@ def fetch_announcements(config: dict, target_date: date) -> List[Dict[str, Any]]
     Returns:
         去重后的公告列表
     """
+    logger.info(f"  抓取 CPSC Recalls 页面: {CPSC_RECALLS_URL}")
     all_announcements = []
 
-    # Source 1: CPSC RSS（必抓）
     try:
-        all_announcements.extend(fetch_cpsc_rss(target_date))
+        # 主路径：Playwright 抓 CPSC Recalls 列表页
+        html = _fetch_with_playwright(CPSC_RECALLS_URL, wait_selector='a[href*="/Recalls/"]')
+        list_announcements = _parse_cpsc_recalls_html(html)
+        logger.info(f"  列表页解析出 {len(list_announcements)} 个公告")
+
+        # 给前 3 条公告抓详情（避免超时，详情抓太多会触发 Akamai）
+        # V2 优化：异步批量抓详情
+        for i, ann in enumerate(list_announcements[:3], 1):
+            logger.debug(f"  [{i}/3] 抓详情: {ann['url']}")
+            detail = _fetch_recall_detail(ann["url"])
+            ann.update(detail)
+            # 慢速：每次间隔 2-3 秒
+            if i < len(list_announcements[:3]):
+                time.sleep(random.uniform(2.0, 3.0))
+
+        all_announcements.extend(list_announcements)
+
     except Exception as e:
-        logger.error(f"  CPSC RSS 抓取最终失败：{e}")
+        logger.error(f"  Playwright 主路径失败：{e}")
 
-    # Source 2: SaferProducts（必抓）
-    try:
-        all_announcements.extend(fetch_saferproducts(target_date))
-    except Exception as e:
-        logger.error(f"  SaferProducts 抓取最终失败：{e}")
+    # 备份路径：RSS（如果主路径失败或抓到 0 条）
+    if not all_announcements:
+        logger.info("  主路径无结果，尝试 RSS 备份")
+        rss_announcements = _fetch_cpsc_rss()
+        all_announcements.extend(rss_announcements)
 
-    # Source 3: 亚马逊后台截图（可选）
-    if config.get("amazon_account_screenshot", {}).get("enabled"):
-        try:
-            all_announcements.extend(fetch_amazon_screenshot(config, target_date))
-        except Exception as e:
-            logger.warning(f"  亚马逊后台截图解析失败：{e}")
-
-    # 去重（按 URL）
+    # 去重
     seen_urls = set()
-    unique_announcements = []
+    unique = []
     for ann in all_announcements:
         url = ann.get("url", "")
         if url and url not in seen_urls:
             seen_urls.add(url)
-            unique_announcements.append(ann)
+            unique.append(ann)
         elif not url:
-            unique_announcements.append(ann)
+            unique.append(ann)
 
     # 保存原始公告到文件
     output_dir = Path(config.get("output", {}).get("dir", "./output"))
@@ -170,29 +283,21 @@ def fetch_announcements(config: dict, target_date: date) -> List[Dict[str, Any]]
 
     with raw_file.open("w", encoding="utf-8") as f:
         f.write(f"# CPSC 原始公告 - {target_date}\n\n")
-        f.write(f"共 {len(unique_announcements)} 条公告\n\n")
-        for i, ann in enumerate(unique_announcements, 1):
+        f.write(f"共 {len(unique)} 条公告\n\n")
+        for i, ann in enumerate(unique, 1):
             f.write(f"## {i}. {ann['title']}\n\n")
             f.write(f"- **来源**: {ann['source']}\n")
-            f.write(f"- **发布时间**: {ann['published']}\n")
+            f.write(f"- **发布时间**: {ann['published'] or '未提取'}\n")
             f.write(f"- **链接**: {ann['url']}\n")
-            f.write(f"- **摘要**: {ann['summary']}\n\n")
-            if ann.get('content'):
-                f.write(f"### 正文\n\n{ann['content']}\n\n")
-            f.write("---\n\n")
+            if ann.get("summary"):
+                f.write(f"- **摘要**: {ann['summary']}\n")
+            f.write("\n---\n\n")
 
     logger.info(f"  原始公告已保存：{raw_file}")
-    return unique_announcements
+    return unique
 
 
 def fetch_amazon_screenshot(config: dict, target_date: date) -> List[Dict[str, Any]]:
-    """
-    解析亚马逊后台"账户状况"截图（OCR）
-
-    这是一个可选功能，需要：
-    1. 用户预先截图（用 Playwright 或手动）
-    2. OCR 识别（用 pytesseract）
-    """
-    # 占位实现 - 实际需要 OCR 库
-    logger.warning("  亚马逊后台 OCR 功能未实现，请用截图 + 手动填入")
+    """亚马逊后台截图 OCR（V2 占位）"""
+    logger.warning("  亚马逊后台 OCR 功能未实现")
     return []

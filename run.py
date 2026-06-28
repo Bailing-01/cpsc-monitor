@@ -28,8 +28,8 @@ from cpsc_monitor.config import load_config
 from cpsc_monitor.fetcher import fetch_announcements
 from cpsc_monitor.ai_analyzer import analyze_risks, summarize_announcements
 from cpsc_monitor.report import render_report, send_email_alert, send_sms_alert
-from cpsc_monitor.history import update_history, log_run
-from cpsc_monitor.utils import setup_logging, ensure_dirs
+from cpsc_monitor.history import update_history
+from cpsc_monitor.utils import setup_logging, ensure_dirs, log_run
 
 
 def parse_args():
